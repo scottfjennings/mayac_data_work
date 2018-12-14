@@ -1,0 +1,243 @@
+---
+output: word_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+#ACR knitr::opts_knit$set(root.dir = 'C:/Users/scott.jennings/Dropbox (Audubon Canyon Ranch)/Mayacamas_birds_habitat')  
+#home
+# 
+knitr::opts_knit$set(root.dir = 'C:/Users/scott.jennings/Dropbox (Audubon Canyon Ranch)/Mayacamas_birds_habitat') 
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(gridExtra)
+library(scatterplot3d)
+library(lidR)
+#library(RColorBrewer)
+#
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+
+######################################
+## habitat data
+######################################
+## read in habitat data
+pf.hab= read.csv("PineFlatRd/Pine_Flat_Veg_Data.csv")
+
+# generate percent covers from point intercept data
+field_per_covs <- pf.hab %>% 
+  gather(key = "variable", value="value", -station) %>% 
+  filter(grepl("PtInt", variable)) %>% 
+  mutate(value=as.numeric(value),
+         variable=substring(variable, 2))%>% 
+  group_by(station, variable) %>%
+  summarise(point.mean = 100*(mean(value/10))) %>% 
+  spread(key="variable", value="point.mean") %>% 
+  select(point = station, ground_per_cov = PtInt.bare, tree_per_cov = PtInt.canopy, forb_per_cov = PtInt.ground, shrub_per_cov = PtInt.shrub) %>% 
+  mutate(ztype = "field") %>% 
+  ungroup()
+  
+field_hts <- pf.hab %>%
+  select(point = station, tree_max_layer_ht = max.tree.height.m, tree_med_layer_ht = med.tree.height.m, forb_max_layer_ht = max.ground_cover.height.m, forb_max_layer_ht = max.ground_cover.height.m, forb_med_layer_ht = med.ground_cover.height.m, shrub_max_layer_ht = max.shrub.height.m, shrub_med_layer_ht = med.shrub.height.m)%>% 
+  mutate(ztype = "field") %>% 
+  ungroup()
+
+field_veg <- full_join(field_per_covs, field_hts)
+
+lidar<- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.01_shrub_0.5.csv") %>% 
+  mutate(lbound = as.factor("0.01_0.5")) %>% 
+  arrange(point)
+
+lidar_pfr <- lidar[1:96,] %>% 
+  droplevels() %>% 
+  filter(radius == 50) %>% 
+  select(point, ground_per_cov, forb_per_cov, forb_max_layer_ht, forb_med_layer_ht, shrub_per_cov, shrub_max_layer_ht, shrub_med_layer_ht, tree_per_cov, tree_max_layer_ht, tree_med_layer_ht, lbound) %>% 
+  mutate(type = "lidar",
+         point = str_sub(point, 1, -2),
+         ztype = paste(type, lbound, sep = "")) %>%
+  select(-type, -lbound) %>% 
+  arrange(point)
+
+lidar_pfr_long <- lidar_pfr %>% 
+  gather(varb, val, -point, -ztype) %>% 
+  separate(varb, into = c("veg_layer", "variable"), "_", extra = "merge") %>% 
+  rename(lidar_value = val) %>% 
+  separate(ztype, into = c("forb_lwr", "shrub_lwr"), "_") %>% 
+  mutate(forb_lwr = gsub("lidar", "", forb_lwr))
+
+
+#--------------------------
+field_veg_long <- field_veg %>% 
+  select(-ztype) %>% 
+  gather(varb, val, -point) %>% 
+  separate(varb, into = c("veg_layer", "variable"), "_", extra = "merge") %>% 
+  rename(field_value = val) %>% 
+  mutate(point = as.character(point))
+
+
+field_lidar_long <- left_join(lidar_pfr_long, field_veg_long) %>% 
+  arrange(point, veg_layer, variable)
+
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+modeler <- function(zveg_layer, zvariable){
+
+  foo <- field_lidar_long %>% 
+    filter(veg_layer == zveg_layer, variable == zvariable)
+  
+  mod <- lm(lidar_value ~ field_value, data = foo)
+  mod_tab <- data.frame(adj_r_sq = round(summary(mod)$adj.r.squared, 3),
+                        slope = round(summary(mod)$coefficients[2, 1], 3),
+                        veg_layer = zveg_layer, 
+                        variable = zvariable)
+  return(mod_tab)
+  
+}
+
+
+mods_results <- rbind(
+modeler("forb", "max_layer_ht"),
+modeler("forb", "med_layer_ht"),
+modeler("forb", "per_cov"),
+modeler("ground", "per_cov"),
+modeler("shrub", "max_layer_ht"),
+modeler("shrub", "med_layer_ht"),
+modeler("shrub", "per_cov"),
+modeler("tree", "max_layer_ht"),
+modeler("tree", "med_layer_ht"),
+modeler("tree", "per_cov"))
+
+
+
+##---
+a = ggplot(data = filter(field_lidar_long, veg_layer == "tree", variable == "med_layer_ht"), aes(x = field_value, y = lidar_value)) +
+  ggtitle("Median tree height") +
+  ylab("") +
+  xlab("") +
+  geom_point() +
+  lims(x = c(0, 20), y = c(0, 20)) +
+  geom_abline(slope = 1, intercept = 0)  + 
+  #annotate("text", x = -Inf, y = Inf, label = "A", hjust = -2, vjust = 2, parse = TRUE) +
+  theme_bw()
+
+b = ggplot(data = filter(field_lidar_long, veg_layer == "tree", variable == "max_layer_ht"), aes(x = field_value, y = lidar_value)) +
+  ggtitle("Maximum tree height") +
+  ylab("") +
+  xlab("") +
+  geom_point() +
+  #lims(x = c(0, 20), y = c(0, 20)) +
+  geom_abline(slope = 1, intercept = 0)  + 
+  #annotate("text", x = -Inf, y = Inf, label = "B", hjust = -2, vjust = 2, parse = TRUE) +
+  theme_bw()
+
+c = ggplot(data = filter(field_lidar_long, veg_layer == "tree", variable == "per_cov"), aes(x = field_value, y = lidar_value)) +
+  ggtitle("Percent tree cover") +
+  ylab("") +
+  xlab("") +
+  geom_point() +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  geom_abline(slope = 1, intercept = 0)  + 
+  #annotate("text", x = -Inf, y = Inf, label = "B", hjust = -2, vjust = 2, parse = TRUE) +
+  theme_bw()
+
+d = ggplot(data = filter(field_lidar_long, veg_layer == "shrub", variable == "per_cov"), aes(x = field_value, y = lidar_value)) +
+  ggtitle("Percent shrub cover") +
+  ylab("") +
+  xlab("") +
+  geom_point() +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  geom_abline(slope = 1, intercept = 0)  + 
+  #annotate("text", x = -Inf, y = Inf, label = "B", hjust = -2, vjust = 2, parse = TRUE) +
+  theme_bw()
+
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+grid.arrange(a, b, c, d, ncol = 2, left = "LiDAR value", bottom = "field value")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+grid.arrange(a, b, c, d, ncol = 1, left = "LiDAR value", bottom = "field value")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+grid.arrange(a, b, c, d, ncol = 4, left = "LiDAR value", bottom = "field value")
+```
+
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+## this requires first 55 or so lines of CountPoints_get_point_coords.R
+
+zpoint <- "8L"
+norm.las <- readLAS(paste("generated_data/norm_laz/norm_", zpoint, ".laz", sep = ""))
+
+point.coords <- get.point.coords(zpoint, ".lcc")  
+
+norm.las <- lasclipCircle(norm.las, point.coords$easting.lcc, point.coords$northing.lcc, 50/0.3048006096012192)
+
+  #------- 
+    
+norm.las.data <- norm.las@data
+
+norm.las.data.noground <- norm.las@data %>% 
+  filter(Z > 0.5) %>% 
+  LAS()
+
+plot(norm.las, bg = "black", colorPalette = brewer.pal(8, "Greys"))   
+
+plot(norm.las, bg = "black", colorPalette = scale_color_grey(start = 0.3, end = 0.8))   
+
+
+plot(norm.las, bg = "black", colorPalette = gray.colors(8, start = 0.3, end = 0.8))
+
+plot(norm.las.data.noground, bg = "white", colorPalette = gray.colors(8, start = 0.3, end = 0.8))
+
+plot(norm.las, bg = "white", colorPalette = gray.colors(8, start = 0.8, end = 0.3))
+
+plot(norm.las, bg = "white", colorPalette = gray.colors(8, start = 0.8, end = 0))
+
+
+rgl.postscript("point_cloud_image.pdf","pdf")
+rgl.snapshot("point_cloud_image", fmt = "png")
+rgl.postscript("graph.svg", fmt="svg")
+
+
+z <- norm.las.data$Z
+x <- norm.las.data$X
+y <- norm.las.data$Y
+colors <- rev(heat.colors(101)) 
+zcolor <- colors[(z - min(z))/diff(range(z))*100 + 1]
+
+scatterplot3d(norm.las.data$X, norm.las.data$Y, norm.las.data$Z, pch = 16, cex.symbols = 0.01, color = zcolor, grid= FALSE, box=FALSE)
+
+library(rgl)
+plot3d(x, y, z, color = gray.colors(8, start = 0.3, end = 0.8))
+
+
+
+```
+
+
+
+
+
+

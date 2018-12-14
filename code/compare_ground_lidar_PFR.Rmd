@@ -1,0 +1,445 @@
+---
+title: "Compare LiDAR to Ground-collected estimates of vegetation heights and percent cover along Pine Flat Rd"
+output: word_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+#ACR
+ knitr::opts_knit$set(root.dir = 'C:/Users/scott.jennings/Dropbox (Audubon Canyon Ranch)/Mayacamas_birds_habitat')  
+#home
+# knitr::opts_knit$set(root.dir = 'C:/Users/Scott/Dropbox (Audubon Canyon Ranch)/Mayacamas_birds_habitat') 
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(stringr)
+#
+
+
+######################################
+## habitat data
+######################################
+## read in habitat data
+pf.hab= read.csv("PineFlatRd/Pine_Flat_Veg_Data.csv")
+
+# generate percent covers from point intercept data
+field_per_covs <- pf.hab %>% 
+  gather(key = "variable", value="value", -station) %>% 
+  filter(grepl("PtInt", variable)) %>% 
+  mutate(value=as.numeric(value),
+         variable=substring(variable, 2))%>% 
+  group_by(station, variable) %>%
+  summarise(point.mean = 100*(mean(value/10))) %>% 
+  spread(key="variable", value="point.mean") %>% 
+  select(point = station, ground_per_cov = PtInt.bare, tree_per_cov = PtInt.canopy, forb_per_cov = PtInt.ground, shrub_per_cov = PtInt.shrub) %>% 
+  mutate(ztype = "field") %>% 
+  ungroup()
+  
+field_hts <- pf.hab %>%
+  select(point = station, tree_max_layer_ht = max.tree.height.m, tree_med_layer_ht = med.tree.height.m, forb_max_layer_ht = max.ground_cover.height.m, forb_max_layer_ht = max.ground_cover.height.m, forb_med_layer_ht = med.ground_cover.height.m, shrub_max_layer_ht = max.shrub.height.m, shrub_med_layer_ht = med.shrub.height.m)%>% 
+  mutate(ztype = "field") %>% 
+  ungroup()
+
+field_veg <- full_join(field_per_covs, field_hts)
+
+derived0.01_0.5a <- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.01_shrub_0.5.csv") %>% 
+  mutate(lbound = as.factor("0.01_0.5")) %>% 
+  arrange(point)
+derived0.01_0.5 <- derived0.01_0.5a[1:96,] %>% 
+  droplevels()
+
+derived0.01_1.5a <- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.01_shrub_1.5.csv") %>% 
+  mutate(lbound = as.factor("0.01_1.5")) %>% 
+  arrange(point)
+derived0.01_1.5 <- derived0.01_1.5a[1:96,] %>% 
+  droplevels()
+
+derived0.1_0.5a <- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.1_shrub_0.5.csv") %>% 
+  mutate(lbound = as.factor("0.1_0.5")) %>% 
+  arrange(point)
+derived0.1_0.5 <- derived0.1_0.5a[1:96,] %>% 
+  droplevels()
+
+derived0.1_1.5a <- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.1_shrub_1.5.csv") %>% 
+  mutate(lbound = as.factor("0.1_1.5")) %>% 
+  arrange(point)
+derived0.1_1.5 <- derived0.1_1.5a[1:96,] %>% 
+  droplevels()
+
+
+
+derived <- rbind(derived0.01_0.5, derived0.01_1.5, derived0.1_0.5, derived0.1_1.5)
+
+
+
+derived50 <- filter(derived, radius == 50) %>% 
+  select(point, ground_per_cov, forb_per_cov, forb_max_layer_ht, forb_med_layer_ht, shrub_per_cov, shrub_max_layer_ht, shrub_med_layer_ht, tree_per_cov, tree_max_layer_ht, tree_med_layer_ht, lbound) %>% 
+  mutate(type = "lidar",
+         point = str_sub(point, 1, -2),
+         ztype = paste(type, lbound, sep = "")) %>%
+  select(-type, -lbound) %>% 
+  arrange(point)
+
+derived50long <- derived50 %>% 
+  gather(varb, val, -point, -ztype) %>% 
+  separate(varb, into = c("veg_layer", "variable"), "_", extra = "merge") %>% 
+  rename(lidar_value = val) %>% 
+  separate(ztype, into = c("forb_lwr", "shrub_lwr"), "_") %>% 
+  mutate(forb_lwr = gsub("lidar", "", forb_lwr))
+
+
+#--------------------------
+field_veg_long <- field_veg %>% 
+  select(-ztype) %>% 
+  gather(varb, val, -point) %>% 
+  separate(varb, into = c("veg_layer", "variable"), "_", extra = "merge") %>% 
+  rename(field_value = val) %>% 
+  mutate(point = as.character(point))
+
+
+field_lidar_long <- left_join(derived50long, field_veg_long) %>% 
+  arrange(point, veg_layer, variable)
+
+unique_combos_filterable <- field_lidar_long %>% 
+  select(veg_layer, variable, shrub_lwr, forb_lwr) %>% 
+  distinct() 
+
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+modeler <- function(zveg_layer, zvariable, zshrub_lwr, zforb_lwr){
+
+  foo <- field_lidar_long %>% 
+    filter(veg_layer == zveg_layer, variable == zvariable, shrub_lwr == zshrub_lwr, forb_lwr == zforb_lwr)
+  
+  mod <- lm(lidar_value ~ field_value, data = foo)
+  mod_tab <- data.frame(adj_r_sq = round(summary(mod)$adj.r.squared, 3),
+                        slope = round(summary(mod)$coefficients[2, 1], 3),
+                        veg_layer = zveg_layer, 
+                        variable = zvariable,
+                        shrub_lwr = zshrub_lwr, 
+                        forb_lwr = zforb_lwr)
+  return(mod_tab)
+  
+}
+
+
+mods_results <- rbind(
+modeler("forb", "max_layer_ht", "0.5", "0.01"),
+modeler("forb", "max_layer_ht", "1.5", "0.01"),
+modeler("forb", "max_layer_ht", "0.5", "0.1"),
+modeler("forb", "max_layer_ht", "1.5", "0.1"),
+modeler("forb", "med_layer_ht", "0.5", "0.01"),
+modeler("forb", "med_layer_ht", "1.5", "0.01"),
+modeler("forb", "med_layer_ht", "0.5", "0.1"),
+modeler("forb", "med_layer_ht", "1.5", "0.1"),
+modeler("forb", "per_cov", "0.5", "0.01"),
+modeler("forb", "per_cov", "1.5", "0.01"),
+modeler("forb", "per_cov", "0.5", "0.1"),
+modeler("forb", "per_cov", "1.5", "0.1"),
+modeler("ground", "per_cov", "0.5", "0.01"),
+modeler("ground", "per_cov", "1.5", "0.01"),
+modeler("ground", "per_cov", "0.5", "0.1"),
+modeler("ground", "per_cov", "1.5", "0.1"),
+modeler("shrub", "max_layer_ht", "0.5", "0.01"),
+modeler("shrub", "max_layer_ht", "1.5", "0.01"),
+modeler("shrub", "max_layer_ht", "0.5", "0.1"),
+modeler("shrub", "max_layer_ht", "1.5", "0.1"),
+modeler("shrub", "med_layer_ht", "0.5", "0.01"),
+modeler("shrub", "med_layer_ht", "1.5", "0.01"),
+modeler("shrub", "med_layer_ht", "0.5", "0.1"),
+modeler("shrub", "med_layer_ht", "1.5", "0.1"),
+modeler("shrub", "per_cov", "0.5", "0.01"),
+modeler("shrub", "per_cov", "1.5", "0.01"),
+modeler("shrub", "per_cov", "0.5", "0.1"),
+modeler("shrub", "per_cov", "1.5", "0.1"),
+modeler("tree", "max_layer_ht", "0.5", "0.01"),
+modeler("tree", "max_layer_ht", "1.5", "0.01"),
+modeler("tree", "max_layer_ht", "0.5", "0.1"),
+modeler("tree", "max_layer_ht", "1.5", "0.1"),
+modeler("tree", "med_layer_ht", "0.5", "0.01"),
+modeler("tree", "med_layer_ht", "1.5", "0.01"),
+modeler("tree", "med_layer_ht", "0.5", "0.1"),
+modeler("tree", "med_layer_ht", "1.5", "0.1"),
+modeler("tree", "per_cov", "0.5", "0.01"),
+modeler("tree", "per_cov", "1.5", "0.01"),
+modeler("tree", "per_cov", "0.5", "0.1"),
+modeler("tree", "per_cov", "1.5", "0.1"))
+
+
+
+##---
+
+percov_plotter <- function(zveg_layer, zvariable, zfig_num){
+
+dat <- filter(field_lidar_long, veg_layer == zveg_layer, variable == zvariable)
+res <- filter(mods_results, veg_layer == zveg_layer, variable == zvariable)
+layer_title <- ifelse(zveg_layer == "tree", "Tree layer",
+                    ifelse(zveg_layer == "shrub", "Shrub layer",
+                     ifelse(zveg_layer =="forb", "Forb layer", "Bare ground"))) 
+
+varb_title <- ifelse(zvariable == "per_cov", "Percent cover",
+                     ifelse(zvariable == "med_layer_ht", "Median layer height", "Maximum layer height"))
+
+main_title <- paste("Figure ", zfig_num, ". ", varb_title, " - ", layer_title, sep = "")
+
+ggplot(data = dat, aes(x = field_value, y = lidar_value)) +
+  labs(title = main_title, x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 100), y = c(0, 100))  +
+  facet_grid(shrub_lwr ~ forb_lwr) +
+  geom_abline(slope = 1, intercept = 0, color = "red") + 
+  geom_text(data    = res,
+            mapping = aes(x = 10, y = 100, label = paste("Adj R-squared = ", adj_r_sq, sep = "")),
+            hjust   = 0) + 
+  geom_text(data    = res,
+            mapping = aes(x = 10, y = 90, label = paste("Slope = ", slope, sep = "")),
+            hjust   = 0)
+}
+
+
+ht_plotter <- function(zveg_layer, zvariable, zfig_num){
+
+dat <- filter(field_lidar_long, veg_layer == zveg_layer, variable == zvariable)
+res <- filter(mods_results, veg_layer == zveg_layer, variable == zvariable)
+
+layer_title <- ifelse(zveg_layer == "tree", "Tree layer",
+                    ifelse(zveg_layer == "shrub", "Shrub layer",
+                     ifelse(zveg_layer =="forb", "Forb layer", "Bare ground"))) 
+
+varb_title <- ifelse(zvariable == "per_cov", "Percent cover",
+                     ifelse(zvariable == "med_layer_ht", "Median layer height", "Maximum layer height"))
+
+main_title <- paste("Figure ", zfig_num, ". ", varb_title, " - ", layer_title, sep = "")
+
+zmin <- ifelse(zveg_layer == "tree", 5, 
+               ifelse(zveg_layer == "shrub", 0.5, 0.01))
+
+zmax <- ifelse(zveg_layer == "tree", (max(dat$lidar_value) * 1.1), 
+               ifelse(zveg_layer == "shrub", 5, 0.5))
+
+ggplot(data = dat, aes(x = field_value, y = lidar_value)) +
+  labs(title = main_title, x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(zmin, zmax), y = c(zmin, zmax))  +
+  facet_grid(shrub_lwr ~ forb_lwr) +
+  geom_abline(slope = 1, intercept = 0, color = "red") + 
+  geom_text(data    = res,
+            mapping = aes(x = zmin, y = zmax, label = paste("Adj R-squared = ", adj_r_sq, sep = "")),
+            hjust   = 0) + 
+  geom_text(data    = res,
+            mapping = aes(x = zmin, y = zmax, label = paste("Slope = ", slope, sep = "")),
+            hjust   = 0, vjust = 2)
+
+}
+
+
+
+```
+
+
+How do estimates of percent cover of vegetation layers (forbs, shrubs, trees/canopy, bare ground) estimated by in-the-field measurements compare to those derived from LiDAR data? 
+
+METHODS
+
+I calculated percent cover estimates from the field-collected data using the raw data and methods provided by Vose (2015). I calculated percent cover estimates from the LiDAR data by dividing the number of returns in a given vegetation type height range by the total number of returns less than or equal to the top of that vegetation type height range. For example, for the shrub layer, I divided the number of returns between 1.5 - 5 m by all returns < 5 m (i.e. all returns in the shrub, forb, and bare ground layers). Including returns of greater height than the vegetation layer under consideration in the denominator would bias the percent cover estimate low.
+
+I used the same height division between the tree and shrub layer (5m) as Vose (2015). In the field-based data collection, the forb or ground cover vegetation layer was 0-2 m above ground, and the shrub layer was 0.5 - 5 m above ground.  The field observers partitioned individual plants into forb or shrub layers based on plant structure. This was not possible to replicate in the LiDAR data, and instead I considered the boundary between shrub and forb layers to be either 0.5 m or 1.5 m, with the upper boundary of the shrub layer always 5 m. The 0.5 m boundary classified more of the low shrub and shrub, but also classified some high forbs as shrub. The 1.5 m boundary classified low shrub as forb, but likely correctly-classified the majority of forbs without including even more shrubs by going to 2 m.
+
+I used a 1 m^2^ raster ground layer (the same elevation was assigned to the entire 1 m^2^ square) to calculate vegetation height above ground from the LiDAR data. Thus, within each 1 m^2^ square, the elevation values of the true ground points are a dense cloud around 0, rather than all = 0; some portion of the very small possitive values represent the ground rather than short vegetation. A solution in the literature seems to be to set some upper limit for the ground points. Below, I have used 2 different upper bounds for the ground points: 0.01 m and 0.1 m.
+
+Within each vegetation layer, I also calculated the maximum and median heights for comparison to the field-collected data.
+
+I examined the relationship between field-based and LiDAR derived estimates of percent cover by fitting a linear model and examining R^2^ values and model coefficients. Where the field-LiDAR relationships were similar between the 0.01m and 0.1m upper bound for ground points, I only reported model values for the 0.1m bound. In the scatter plots below, the red line indicates the expected 1:1 relationship between field-based vs. LiDAR-derived estimates. The numbers by the dots identify which point count point the data correspond to.
+
+RESULTS AND DISCUSSION
+
+Percent Cover
+
+For percent cover of the tree layer (Fig 1), there was a very close relationship between the 2 different estimates of percent tree cover, but the LiDAR-derived estimate increasingly underestimated the field-based estimate as the field-based estimate increased.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+percov_plotter("tree", "per_cov", 1)
+```
+
+
+For percent cover of the shrub layer (Fig 2), setting the lower limit for shrub vegetation to 0.5 m provided the best model fit and also yielded a LiDAR:field relationship closer to 1:1, though at approximately 0.4:1 this was still quite far from the predicted perfect relationship. Thus the LiDAR-derived estimates underestimate shrub percent cover at high field-based percent cover. For shrub percent cover, the LiDAR-derived estimate substantially underestimated the field-based estimate at higher values of the field-based estimate. The LiDAR-derived estimates of shrub cover are not sensitive to the upper limit for ground points. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+percov_plotter("shrub", "per_cov", 2)
+```
+
+
+
+
+For percent cover of both the forb (Fig 3) and bare ground (Fig. 4) layers, there was a negative relationship between the LiDAR-derived and field-estimated values. Thus, the LiDAR-derived estimate of percent cover over-estimates field-based percent cover at low values of field-based percent cover, but under-estimates field-based percent cover at high values of field-based percent cover. This effect was stronger when the boundary between the bare ground and forb layers was set to 0.1 m than when it was set at 0.01 m. This pattern was largely driven by points 14 and 16. I discuss this in more detail below.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+percov_plotter("forb", "per_cov", 3)
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+percov_plotter("ground", "per_cov", 4)
+
+```
+
+
+
+Maximum Height
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ht_plotter("tree", "max_layer_ht", 5)
+```
+
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ht_plotter("shrub", "max_layer_ht", 6)
+```
+
+LiDAR-derived estimates of maximum height for the forb and shrub layers are essentially unusable because the value ends up just being the user-defined upper boundary of the layer. Plots are included to illustrate this point, but model results are not reported.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ht_plotter("forb", "max_layer_ht", 7)
+```
+
+Median Height
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ht_plotter("tree", "med_layer_ht", 8)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ht_plotter("shrub", "med_layer_ht", 9)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ht_plotter("forb", "med_layer_ht", 10)
+```
+
+
+
+
+
+There are a few possible, non-mutually-exclusive explanations for the lack of agreement betweeen field-based and LiDAR-derived estimates of percent cover and vegetation height. 
+
+The first is a mis-match in height definitions for the forb and shrub layers between the 2 data types. Thus the field-based and LiDAR-derived percent cover estimates are really estimating different things. A particularly dramatic example of this is point 14; The field-based survey detected no forb cover at this point (Figs 11, 12c, 13c), yet there is apparently substantial vegetation below 1.5 m that was classified as shrub. However, the LiDAR-derived variables for cover and heights consider this shorter-than-1.5 m vegetation to be forb.
+
+Second, the point intercept method for determining percent cover may just be a fundamentally different way of estimating percent cover than the method used to calculate percent cover from the LiDAR data. For the LiDAR, I determined percent cover of a particular layer by dividing the total number of returns from all heights, including ground returns, by the total number of returns from the height bin in question (e.g. 1.5 - 5 m for the shrub layer). Because upper layers can "mask" lower layers, this method is likely to underestimate the percent cover of layers below the top (tree/canopy) layer, and this effect is likely to be strongest at the lowest level. Additionally, this effect is likely to be stronger where the tree layer is denser.
+
+The field-based veg data were collected during spring, while the LiDAR data were collected in the fall. This may account for the underestimation of field-based estimates of shrub and tree percent cover and median tree height by the LiDAR_derived estimates at higher values of the field-based estimate, particularly if deciduous trees and shrubs tend to grow in denser stands.
+
+
+I haven't yet come up with a convincing reason for the consistent negative relationship between field-based and LiDAR-derived estimates in the forb and bare ground layers. This may be in some way related to there being relatively fewer and fewer possible photons in the laser beam available to bounce back to the plane at the lower vegetation layers, but I can't quite work out exactly what the machanism might be. 
+
+See figures below for an alternative visualization of field-based vs LiDAR-derived estimates of percent cover and vegetation heights, by point.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "per_cov", veg_layer == "tree") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 11. Tree percent cover by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "per_cov", veg_layer == "shrub") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 12. Shrub percent cover by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "per_cov", veg_layer == "forb") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 13. Forb percent cover by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "per_cov", veg_layer == "ground") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 14. Bare ground percent cover by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "med_layer_ht", veg_layer == "tree") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 15. Median tree height by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "med_layer_ht", veg_layer == "shrub") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 16. Median shrub height by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+field_lidar_long %>% 
+  filter(variable == "med_layer_ht", veg_layer == "forb") %>% 
+  mutate(ztype2 = paste("forb", forb_lwr, "shrub", shrub_lwr, sep = "")) %>% 
+  select(point, veg_layer, variable, ztype2, lidar_value, field_value) %>% 
+  gather(key, val, -point, -variable, -ztype2, -veg_layer) %>% 
+  mutate(ztype = ifelse(key == "lidar_value", ztype2, key)) %>% 
+  ggplot(aes(x = point)) +
+    labs(title = "Figure 17. Median forb height by point", y = "percent cover") +
+    geom_col(aes(y = val, fill = ztype), position = "dodge") +
+    facet_wrap(~ztype2, ncol=2) +
+    theme(legend.title = element_blank())
+```

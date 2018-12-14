@@ -1,0 +1,451 @@
+---
+title: "Compare LiDAR to Ground-collected estimates of vegetation heights and percent cover along Pine Flat Rd"
+output: word_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+#ACR
+# 
+knitr::opts_knit$set(root.dir = 'C:/Users/scott.jennings/Dropbox (Audubon Canyon Ranch)/Mayacamas_birds_habitat')  
+#home
+# knitr::opts_knit$set(root.dir = 'C:/Users/Scott/Dropbox (Audubon Canyon Ranch)/Mayacamas_birds_habitat') 
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(stringr)
+#
+
+
+######################################
+## habitat data
+######################################
+## read in habitat data
+pf.hab= read.csv("PineFlatRd/Pine_Flat_Veg_Data.csv")
+
+
+field_per_covs <- pf.hab %>% 
+  gather(key = "variable", value="value", -station) %>% 
+  filter(grepl("PtInt", variable)) %>% 
+  mutate(value=as.numeric(value),
+         variable=substring(variable, 2))%>% 
+  group_by(station, variable) %>%
+  summarise(point.mean = 100*(mean(value/10))) %>% 
+  spread(key="variable", value="point.mean") %>% 
+  select(point = station, ground_per_cov = PtInt.bare, tree_per_cov = PtInt.canopy, forb_per_cov = PtInt.ground, shrub_per_cov = PtInt.shrub) %>% 
+  mutate(ztype = "field") %>% 
+  ungroup()
+  
+field_hts <- pf.hab %>%
+  select(point = station, tree_max_layer_ht = max.tree.height.m, tree_med_layer_ht = med.tree.height.m, forb_max_layer_ht = max.ground_cover.height.m, forb_max_layer_ht = max.ground_cover.height.m, forb_med_layer_ht = med.ground_cover.height.m, shrub_max_layer_ht = max.shrub.height.m, shrub_med_layer_ht = med.shrub.height.m)%>% 
+  mutate(ztype = "field") %>% 
+  ungroup()
+
+field_veg <- full_join(field_per_covs, field_hts)
+
+derived.01a <- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.01.csv") %>% 
+  mutate(lbound = as.factor(0.01)) %>% 
+  arrange(point)
+derived.01 <- derived.01a[1:96,] %>% 
+  droplevels()
+
+derived.1a <- read.csv("generated_data/derived_variables/derived_variables_bottom_forb_0.1.csv") %>% 
+  mutate(lbound = as.factor(0.1)) %>% 
+  arrange(point)
+derived.1 <- derived.1a[1:96,] %>% 
+  droplevels()
+
+derived <- rbind(derived.01, derived.1)
+
+
+
+derived50 <- filter(derived, radius == 50) %>% 
+  select(point, ground_per_cov, forb_per_cov, forb_max_layer_ht, forb_med_layer_ht, shrub_per_cov, shrub_max_layer_ht, shrub_med_layer_ht, tree_per_cov, tree_max_layer_ht, tree_med_layer_ht, lbound) %>% 
+  mutate(type = "lidar",
+         point = str_sub(point, 1, -2),
+         ztype = paste(type, lbound, sep = "")) %>%
+  select(-type, -lbound) %>% 
+  arrange(point)
+
+
+#--------------------------
+field_veg_idvarbs <- field_veg %>% 
+  select(-ztype) %>% 
+  gather(varb, val, -point) %>% 
+  mutate(varb = paste("field", varb, sep = "_"),
+         val = as.numeric(val),
+         point = as.character(point)) %>% 
+  spread(varb, val)
+
+#--------------------------
+
+both_compare <- rbind(field_veg, derived50)
+both_compare2 <- left_join(field_veg_idvarbs, derived50)
+
+both_compare_long <- both_compare %>% 
+  gather(varb, val, -point, -ztype)
+
+
+both_compare_wide <- both_compare_long %>% 
+  mutate(type.varb = paste(ztype, varb, sep = "_")) %>% 
+  select(-ztype, -varb) %>% 
+  spread(type.varb, val)
+
+
+```
+
+How do estimates of percent cover of vegetation layers (forbs, shrubs, trees/canopy, bare ground) estimated by in-the-field measurements compare to those derived from LiDAR data? 
+
+METHODS
+
+I calculated percent cover estimates from the field-collected data using the raw data and methods provided by Vose (2015). I calculated percent cover estimates from the LiDAR data by dividing the number of returns in a given vegetation type height range by the total number of returns less than or equal to the top of that vegetation type height range. For example, for the shrub layer, I divided the number of returns between 1.5 - 5 m by all returns < 5 m (i.e. all returns in the shrub, forb, and bare ground layers). Including returns of greater height than the vegetation layer under consideration in the denominator would bias the percent cover estimate low.
+
+I used the same height division between the tree and shrub layer (5m) as Vose (2015). In the field-based data collection, the forb or ground cover vegetation layer was 0-2 m above ground, and the shrub layer was 0.5 - 5 m above ground.  The field observers partitioned individual plants into forb or shrub layers based on plant structure. This was not possible to replicate in the LiDAR data, and instead the forb and shrub layers were defined as extending from 0.1 m (or 0.01 m, see below) to 1.5m and 1.5 to 5 m, respectively.  
+
+I used a 1 m^2^ raster ground layer (the same elevation was assigned to the entire 1 m^2^ square) to calculate vegetation height above ground from the LiDAR data. Thus, within each 1 m^2^ square, the elevation values of the true ground points are a dense cloud around 0, rather than all = 0; some portion of the very small possitive values represent the ground rather than short vegetation. A solution in the literature seems to be to set some upper limit for the ground points. Below, I have used 2 different upper bounds for the ground points: 0.01 m and 0.1 m.
+
+Within each vegetation layer, I also calculated the maximum and median heights for comparison to the field-collected data.
+
+I examined the relationship between field-based and LiDAR derived estimates of percent cover by fitting a linear model and examining R^2^ values and model coefficients. Where the field-LiDAR relationships were similar between the 0.01m and 0.1m upper bound for ground points, I only reported model values for the 0.1m bound. In the scatter plots below, the red line indicates the expected 1:1 relationship between field-based vs. LiDAR-derived estimates. The numbers by the dots identify which point count point the data correspond to.
+
+RESULTS AND DISCUSSION
+
+Percent Cover
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+
+ground_comp0.01 <- lm(lidar0.01_ground_per_cov ~ field_ground_per_cov, data = both_compare_wide)
+tree_comp0.01 <- lm(lidar0.01_tree_per_cov ~ field_tree_per_cov, data = both_compare_wide)
+shrub_comp0.01 <- lm(lidar0.01_shrub_per_cov ~ field_shrub_per_cov, data = both_compare_wide)
+forb_comp0.01 <- lm(lidar0.01_forb_per_cov ~ field_forb_per_cov, data = both_compare_wide)
+
+
+ground_comp0.1 <- lm(lidar0.1_ground_per_cov ~ field_ground_per_cov, data = both_compare_wide)
+tree_comp0.1 <- lm(lidar0.1_tree_per_cov ~ field_tree_per_cov, data = both_compare_wide)
+shrub_comp0.1 <- lm(lidar0.1_shrub_per_cov ~ field_shrub_per_cov, data = both_compare_wide)
+forb_comp0.1 <- lm(lidar0.1_forb_per_cov ~ field_forb_per_cov, data = both_compare_wide)
+
+```
+
+
+For percent cover of the tree layer (Fig 1), the linear model fitted to the field-based and LiDAR derived estimates had an adjusted R^2^ of `r round(summary(tree_comp0.1)$adj.r.squared, 2)`, and the model coefficient indicated that for every 1% increase in percent cover in the field-based estimate, there was a `r round(summary(tree_comp0.1)$coefficients[2, 1], 2)`% increase in percent cover of the LiDAR-derived estimate.Thus there was a very close relationship between the 2 different estimates of percent tree cover, but the LiDAR-derived estimate increasingly underestimated the field-based estimate as the field-based estimate increased.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_tree_per_cov, y = tree_per_cov)) +
+  labs(title = "Figure 1. Percent cover - Tree layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+
+#+ 
+#  annotate("text", x = 15, y = 100, label = paste("italic(R) ^ 2 == ",  #round(summary(tree_comp0.1)$adj.r.squared, 2), sep = ""),
+#  parse = TRUE) + 
+#  annotate("text", x = 40, y = 90, label = paste("Field-based = ", round(summary(tree_comp0.1)$coefficients[1, #1], 2),  " + (LiDAR * ", round(summary(tree_comp0.1)$coefficients[2, 1], 2), ")", sep = ""))
+  
+  
+```
+
+
+
+
+For percent cover of the shrub layer (Fig 2), the linear model fitted to the field-based and LiDAR derived percent cover estimates had an adjusted R^2^ of only `r round(summary(shrub_comp0.1)$adj.r.squared, 2)`, and the model coefficient indicated that for every 1% increase in percent cover in the field-based estimate, there was a `r round(summary(shrub_comp0.1)$coefficients[2, 1], 2)`% increase in percent cover of the LiDAR-derived estimate. Thus the LiDAR-derived estimates underestimate shrub percent cover at high field-based percent cover. For shrub percent cover, the LiDAR-derived estimate substantially underestimated the field-based estimate at higher values of the field-based estimate. The LiDAR-derived estimates of shrub cover are not sensitive to the upper limit for ground points. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_shrub_per_cov, y = shrub_per_cov)) +
+  labs(title = "Figure 2. Percent cover - Shrub layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+  
+
+```
+
+
+For percent cover of the forb layer (Fig 3), the linear model fitted to the field-based and LiDAR-derived data for the 0.1 m and 0.01 m upper limits for ground points had adjusted R^2^ values of `r round(summary(forb_comp0.1)$adj.r.squared, 2)` and `r round(summary(forb_comp0.01)$adj.r.squared, 2)`, respectively. However, contrary to expectations, there was a negative relationship between field and LiDAR data, with the model coefficients indicating that for every 1% increase in percent cover in the field-based estimate, there was a `r -1 * round(summary(forb_comp0.1)$coefficients[2, 1], 2)`% (0.1 m upper limit) and `r -1 * round(summary(forb_comp0.01)$coefficients[2, 1], 2)`% (0.01 m upper limit) decrease in percent cover of the LiDAR-derived estimate. The LiDAR-derived estimate of percent cover over-estimates field-based percent cover at low values of field-based percent cover, but under-estimates field-based percent cover at high values of field-based percent cover. This effect was stronger when the boundary between the bare ground and forb layers was set to 0.1 m than when it was set at 0.01 m. This pattern was largely driven by points 14 and 16. I discuss this in more detail below.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(data = both_compare2, aes(x = field_forb_per_cov, y = forb_per_cov)) +
+  labs(title = "Figure 3.Percent cover - Forb layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+
+```
+
+
+For bare ground, the linear model fitted to the field-based and LiDAR derived percent cover data for the 0.1 m and 0.01 m upper limits for ground points had adjusted R^2^ values of `r round(summary(ground_comp0.1)$adj.r.squared, 3)`, and `r round(summary(ground_comp0.01)$adj.r.squared, 3)`, respectively. Similar to the relationship observed for forb cover, and contrary to what was expected, there was a negative relationship between field and LiDAR data, with the model coefficients indicating that for every 1% increase in percent cover in the field-based estimate, there was a `r -1 * round(summary(ground_comp0.1)$coefficients[2, 1], 2)`% (0.1 m upper limit) and `r -1 * round(summary(ground_comp0.01)$coefficients[2, 1], 2)`% (0.1 m upper limit) decrease in percent cover of the LiDAR-derived estimate. Again, points 14 and 16 were influential in this pattern; see below for a possible explanation.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_ground_per_cov, y = ground_per_cov)) +
+  labs(title = "Figure 4. Percent cover - Bare ground", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+
+  
+
+```
+
+
+
+Maximum Height
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+
+tree_maxht0.01 <- lm(lidar0.01_tree_max_layer_ht ~ field_tree_max_layer_ht, data = both_compare_wide)
+shrub_maxht0.01 <- lm(lidar0.01_shrub_max_layer_ht ~ field_shrub_max_layer_ht, data = both_compare_wide)
+forb_maxht0.01 <- lm(lidar0.01_forb_max_layer_ht ~ field_forb_max_layer_ht, data = both_compare_wide)
+
+
+tree_maxht0.1 <- lm(lidar0.1_tree_max_layer_ht ~ field_tree_max_layer_ht, data = both_compare_wide)
+#tree_maxht0.1no12 <- lm(lidar0.1_tree_max_layer_ht ~ field_tree_max_layer_ht, data = subset(both_compare_wide, point != 12))
+shrub_maxht0.1 <- lm(lidar0.1_shrub_max_layer_ht ~ field_shrub_max_layer_ht, data = both_compare_wide)
+forb_maxht0.1 <- lm(lidar0.1_forb_max_layer_ht ~ field_forb_max_layer_ht, data = both_compare_wide)
+
+```
+
+
+For maximum height of the tree layer (Fig 5), the linear model fitted to the field-based and LiDAR derived data had an adjusted R^2^ of `r round(summary(tree_maxht0.1)$adj.r.squared, 2)`, and the model coefficient indicated that for every 1 m increase in maximum height in the field-based estimate, there was a `r round(summary(tree_maxht0.1)$coefficients[2, 1], 2)` m increase in maximum height of the LiDAR-derived estimate. The estimates of tree cover are not sensitive to the upper limit for ground points. Point 11 stands out in Fig 5; for this point, there is a very tall tree near the boundary of the 50m radius circle in the LiDAR data. It is possible that this tree was not included in the ground-based survey. In contrast, the dense forest and steeper terrain at point 3 may have led the field observers to overestimate of tree height there. The pattern at point 12 is likely driven exclusively by the presence of the power line (see also median height, below).
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_tree_max_layer_ht, y = tree_max_layer_ht)) +
+  labs(title = "Figure 5. Maximum vegetation height - Tree layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  #lims(x = c(5, 50), y = c(5, 50)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+  
+  
+```
+
+
+LiDAR-derived estimates of maximum height for the forb and shrub layers are essentially unusable because the value ends up just being the user-defined upper boundary of the layer. Plots are included to illustrate this point, but model results are not reported.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_shrub_max_layer_ht, y = shrub_max_layer_ht)) +
+  labs(title = "Figure 6. Median vegetation height - Shrub layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  lims(x = c(1.5, 5), y = c(1.5, 5)) +
+  geom_smooth(method = "lm") +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+  
+
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(data = both_compare2, aes(x = field_forb_max_layer_ht, y = forb_max_layer_ht)) +
+  labs(title = "Figure 7. Maximum vegetation height - Forb layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 1.5), y = c(0, 1.5)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+
+```
+
+
+
+
+
+
+
+Median Height
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+
+tree_medht0.01 <- lm(lidar0.01_tree_med_layer_ht ~ field_tree_med_layer_ht, data = both_compare_wide)
+shrub_medht0.01 <- lm(lidar0.01_shrub_med_layer_ht ~ field_shrub_med_layer_ht, data = both_compare_wide)
+forb_medht0.01 <- lm(lidar0.01_forb_med_layer_ht ~ field_forb_med_layer_ht, data = both_compare_wide)
+
+
+tree_medht0.1 <- lm(lidar0.1_tree_med_layer_ht ~ field_tree_med_layer_ht, data = both_compare_wide)
+tree_medht0.1no12 <- lm(lidar0.1_tree_med_layer_ht ~ field_tree_med_layer_ht, data = subset(both_compare_wide, point != 12))
+shrub_medht0.1 <- lm(lidar0.1_shrub_med_layer_ht ~ field_shrub_med_layer_ht, data = both_compare_wide)
+forb_medht0.1 <- lm(lidar0.1_forb_med_layer_ht ~ field_forb_med_layer_ht, data = both_compare_wide)
+
+```
+
+
+For median height of the tree layer, the linear model fitted to the field-based and LiDAR derived data had a poor fit, with an adjusted R^2^ of `r round(summary(tree_medht0.1)$adj.r.squared, 2)`. The model coefficient indicated that for every 1 m increase in the field-based estimate of median tree height, there was a `r round(summary(tree_medht0.1)$coefficients[2, 1], 2)` m increase in the LiDAR-derived estimate. Point 12 obviously stands out in Fig 8, and this is a point with a powerline dominating the tree height range. If we remove point 12 and refit the linear model, the adjusted R^2^ increases to `r round(summary(tree_medht0.1no12)$adj.r.squared, 2)`, but the estimated coefficient for relationship between the 2 estimates remains similar (`r round(summary(tree_medht0.1no12)$coefficients[2, 1], 2)` m increase LiDAR-derived median height for each 1 m increase in the field-based estimate). Thus the overall relationship between the 2 estimates is not sensitive to a single point with a powerline. In general across all points, the LiDAR-derived estimate of median tree height increasingly underestimated the field-based median height estimate as the field-based estimate increased.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_tree_med_layer_ht, y = tree_med_layer_ht)) +
+  labs(title = "Figure 8. Median vegetation height - Tree layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  #lims(x = c(5, 50), y = c(5, 50)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+  
+  
+```
+
+
+
+
+For median height of the shrub layer (Fig 9), the linear model fitted to the field-based and LiDAR-derived data had a fairly-poor fit with an adjusted R^2^ of `r round(summary(shrub_medht0.1)$adj.r.squared, 2)`. The model coefficient indicated that for every 1 m increase  in the field-based estimate of median height, there was a `r round(summary(shrub_medht0.1)$coefficients[2, 1], 2)` m increase in the of the LiDAR-derived estimate of median height. There appeared to be a very close relationship (near 1:1) between field-based and LiDAR-derived median shrub height estimates for around half of the points (2-5, 7, 13, 14 and 16)), but the remaining points (except for 15) seem to have a substantial influence on the slope of the line.  
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare2, aes(x = field_shrub_med_layer_ht, y = shrub_med_layer_ht)) +
+  labs(title = "Figure 9. Median vegetation height - Shrub layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  lims(x = c(1.5, 5), y = c(1.5, 5)) +
+  geom_smooth(method = "lm") +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+  
+
+```
+
+
+For median height of the forb layer (Fig 10), the linear model fitted to the field-based and LiDAR derived data for the 0.1 m and 0.01 m upper limits for ground points had adjusted R^2^ of `r round(summary(forb_medht0.1)$adj.r.squared, 2)` and`r round(summary(forb_medht0.01)$adj.r.squared, 2)`, respectively. However, as with percent cover and maximum height, and contrary to expectations, there was a negative relationship between median height estimated from field and LiDAR data, with the model coefficients indicating that for every 1 m increase in median height in the field-based estimate, there was a `r -1 * round(summary(forb_medht0.1)$coefficients[2, 1], 2)` m (0.1 m upper limit) and `r -1 * round(summary(forb_medht0.01)$coefficients[2, 1], 2)` m (0.01 m upper limit) decrease in the LiDAR-derived estimate, respectively. 
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(data = both_compare2, aes(x = field_forb_med_layer_ht, y = forb_med_layer_ht)) +
+  labs(title = "Figure 10. Median vegetation height - Forb layer", x = "field-based", y = "LiDAR") +
+  geom_point() +
+  geom_text(aes(label = point),hjust=0, vjust=1) +
+  geom_smooth(method = "lm") +
+  lims(x = c(0, 1.5), y = c(0, 1.5)) +
+  facet_grid(~ztype) +
+  geom_abline(slope = 1, intercept = 0, color = "red")
+
+```
+
+
+
+There are a few possible, non-mutually-exclusive explanations for the lack of agreement betweeen field-based and LiDAR-derived estimates of percent cover and vegetation height. 
+
+The first is a mis-match in height definitions for the forb and shrub layers between the 2 data types. Thus the field-based and LiDAR-derived percent cover estimates are really estimating different things. A particularly dramatic example of this is point 14; The field-based survey detected no forb cover at this point (Figs 11, 12c, 13c), yet there is apparently substantial vegetation below 1.5 m that was classified as shrub. However, the LiDAR-derived variables for cover and heights consider this shorter-than-1.5 m vegetation to be forb.
+
+Second, the point intercept method for determining percent cover may just be a fundamentally different way of estimating percent cover than the method used to calculate percent cover from the LiDAR data. For the LiDAR, I determined percent cover of a particular layer by dividing the total number of returns from all heights, including ground returns, by the total number of returns from the height bin in question (e.g. 1.5 - 5 m for the shrub layer). Because upper layers can "mask" lower layers, this method is likely to underestimate the percent cover of layers below the top (tree/canopy) layer, and this effect is likely to be strongest at the lowest level. Additionally, this effect is likely to be stronger where the tree layer is denser.
+
+The field-based veg data were collected during spring, while the LiDAR data were collected in the fall. This may account for the underestimation of field-based estimates of shrub and tree percent cover and median tree height by the LiDAR_derived estimates at higher values of the field-based estimate, particularly if deciduous trees and shrubs tend to grow in denser stands.
+
+
+I haven't yet come up with a convincing reason for the consistent negative relationship between field-based and LiDAR-derived estimates in the forb and bare ground layers. This may be in some way related to there being relatively fewer and fewer possible photons in the laser beam available to bounce back to the plane at the lower vegetation layers, but I can't quite work out exactly what the machanism might be.  
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+foof <- both_compare_long %>% 
+  filter(grepl("per_cov", varb))
+ggplot(data = foof, aes(x = point)) +
+  labs(title = "Figure 11. Percent cover by point", y = "percent cover") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  facet_wrap(~varb, ncol=2) +
+  theme(legend.title = element_blank())
+
+```
+
+
+
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = both_compare_long %>% 
+  filter(grepl("tree_max_layer_ht", varb)), aes(x = point)) +
+  labs(title = "Figure 12a. Maximum tree height by point", y = "max height") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  theme(legend.title = element_blank())
+ggplot(data = both_compare_long %>% 
+  filter(grepl("shrub_max_layer_ht", varb)), aes(x = point)) +
+  labs(title = "Figure 12b. Maximum shrub height by point", y = "max height") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  theme(legend.title = element_blank())
+ggplot(data = both_compare_long %>% 
+  filter(grepl("forb_max_layer_ht", varb)), aes(x = point)) +
+  labs(title = "Figure 12c. Maximum forb height by point", y = "max height") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  theme(legend.title = element_blank())
+
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#foof <- both_compare_long %>% 
+#  filter(grepl("med_layer_ht", varb))
+ggplot(data = both_compare_long %>% 
+  filter(grepl("tree_med_layer_ht", varb)), aes(x = point)) +
+  labs(title = "Figure 13a. Median tree height by point", y = "med height") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  theme(legend.title = element_blank())
+ggplot(data = both_compare_long %>% 
+  filter(grepl("shrub_med_layer_ht", varb)), aes(x = point)) +
+  labs(title = "Figure 13b. Median shrub height by point", y = "med height") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  theme(legend.title = element_blank())
+ggplot(data = both_compare_long %>% 
+  filter(grepl("forb_med_layer_ht", varb)), aes(x = point)) +
+  labs(title = "Figure 13c. Median forb height by point", y = "med height") +
+  geom_col(aes(y = val, fill = ztype), position = "dodge") +
+  theme(legend.title = element_blank())
+
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#ggplot(data = both_compare2, aes(x = field_forb_per_cov, y = field_shrub_per_cov)) +
+#  geom_point() +
+#  geom_text(aes(label = point),hjust=0, vjust=1) +
+#  geom_smooth(method = "lm") +
+#  lims(x = c(0, 100), y = c(0, 100))
+
+  
+
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#ggplot(data = both_compare2, aes(x = field_forb_per_cov, y = field_tree_per_cov)) +
+#  geom_point() +
+#  geom_text(aes(label = point),hjust=0, vjust=1) +
+#  geom_smooth(method = "lm") +
+#  lims(x = c(0, 100), y = c(0, 100))
+
+  
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#ggplot(data = both_compare2, aes(x = field_forb_per_cov, y = field_ground_per_cov)) +
+#  geom_point() +
+#  geom_text(aes(label = point),hjust=0, vjust=1) +
+#  geom_smooth(method = "lm") +
+#  lims(x = c(0, 100), y = c(0, 100))
+
+  
+
+```

@@ -1,0 +1,24 @@
+---
+title: "compare skewness and kurtosis"
+
+output: word_document
+---
+```{r}
+library(ggplot2)
+```
+
+```{r}
+sk_1R
+```
+
+```{r}
+sk_2L
+```
+
+```{r}
+sk_3L
+```
+
+```{r}
+sk_4L
+```
